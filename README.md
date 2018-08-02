@@ -8,10 +8,10 @@ There are four files, excluding this README, in the repository:
 1. googleGeoCode_sample.pl
 
  This is a sample Perl script to talk to an external web service (Google Geocoding API in this case) via a proxy with NTLM authentication.  Replace the below symbols in the script appropriately for your own environment:
-  WORKSTATION
-  DOMAIN\USER
-  PASSWORD
-  PROXY.SERVER.FQDN:PORT
+  WORKSTATION (by your workstation ID, usually could by any string),
+  DOMAIN\USER (by your Active Direcory domain and user),
+  PASSWORD (by your password for the AD user),
+  PROXY.SERVER.FQDN:PORT (by your NTLM proxy FQDN / IP address and port number),
   APPID (for Google Geocoding API)
 
 
