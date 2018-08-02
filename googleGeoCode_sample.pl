@@ -17,12 +17,12 @@ use JSON;
 
 my $user = 'DOMAIN\USER';
 my $pass = 'PASSWORD';
-my $http_proxy = 'connect://PROXY.SERVER.FQDN:8080';
+my $http_proxy = 'connect://PROXY.SERVER.FQDN:PORT';
 my $appid = "APPID";
 my $ua = LWP::UserAgent->new(ssl_opts => {verify_hostname => 0},
 			     keep_alive => 1);
 $ua->proxy([qw(http https)], $http_proxy);
-$ua->credentials('PROXY.SERVER.FQDN:8080', '', $user, $pass);
+$ua->credentials('PROXY.SERVER.FQDN:PORT', '', $user, $pass);
 
 while (<>) {
     chomp;
