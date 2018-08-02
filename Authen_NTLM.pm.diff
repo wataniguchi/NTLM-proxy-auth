@@ -1,0 +1,179 @@
+--- Authen/NTLM.pm.dist	2011-09-09 11:09:56.000000000 +0900
++++ Authen/NTLM.pm	2018-07-30 18:44:38.671583400 +0900
+@@ -183,6 +183,7 @@
+ my $msg3_hlen = 12 + ($hdr_len*6) + 4;
+ 
+ my $state = 0;
++my $nego_msg = "";
+ 
+ my $host = "";
+ my $ntlm_v2 = 0;
+@@ -253,6 +254,7 @@
+ sub ntlm_reset
+ {
+   $state = 0;
++  $nego_msg = "";
+ }
+ 
+ sub ntlmv2
+@@ -293,6 +295,8 @@
+       $flags = pack($msg3_tl, $c_info->{flags});
+ 	 }
+ 	 elsif ($ntlm_v2 eq '1') {
++      $msg3_hlen += 24;  # for MIC and os ver
++      $domain = substr($challenge, $c_info->{domain}{offset}, $c_info->{domain}{len}); 
+       $lmResp = &lmv2Encrypt($c_info->{data});
+       $ntResp = &ntv2Encrypt($c_info->{data}, $c_info->{target_data});
+       $flags = pack($msg3_tl, $ntlm_v2_msg3_flags);
+@@ -306,21 +310,44 @@
+     $u_host = &unicode(($host ? $host : $user));
+     $response = pack($msg3, $ident, 3);
+ 
+-    $lm_off = $msg3_hlen;
+-    $nt_off = $lm_off + length($lmResp);
+-    $d_off = $nt_off + length($ntResp);
++    $d_off = $msg3_hlen;
+     $u_off = $d_off + length($domain);
+     $wks_off = $u_off + length($u_user);
+-    $s_off = $wks_off + length($u_host);
++    $lm_off = $wks_off + length($u_host);
++    $nt_off = $lm_off + length($lmResp);
++    $s_off = $nt_off + length($ntResp);
+     $lm_hdr = &hdr($lmResp, $msg3_hlen, $lm_off);
+     $nt_hdr = &hdr($ntResp, $msg3_hlen, $nt_off);
+     $domain_hdr = &hdr($domain, $msg3_hlen, $d_off);
+     $user_hdr = &hdr($u_user, $msg3_hlen, $u_off);
+     $wks_hdr = &hdr($u_host, $msg3_hlen, $wks_off);
+-    $session_hdr = &hdr("", $msg3_hlen, $s_off);
+-    $response .= $lm_hdr . $nt_hdr . $domain_hdr . $user_hdr .
+-                 $wks_hdr . $session_hdr . $flags .
+-		 $lmResp . $ntResp . $domain . $u_user . $u_host;
++    $session_hdr = pack($str_hdr, 0, 0, $s_off);
++    if ($ntlm_v2 and $ntlm_v2 eq '1') {
++      my $mic = "\0" x 16;
++      my $mic_off = $d_off - length($mic);
++      my $os_ver = pack("H*", "0601b11d0000000f");
++      $response .= $lm_hdr . $nt_hdr . $domain_hdr . $user_hdr .
++                   $wks_hdr . $session_hdr . $flags . $os_ver . $mic .
++		   $domain . $u_user . $u_host . $lmResp . $ntResp;
++      my $ntlm_v2_hash = &ntlmv2Hash;
++      my $concat = $c_info->{data} . substr($ntResp, 16, length($ntResp) - 16);
++      my $hmac = Digest::HMAC_MD5->new($ntlm_v2_hash);
++      $hmac->add($concat);
++      my $nt_proof_str = $hmac->digest;
++      $hmac = Digest::HMAC_MD5->new($ntlm_v2_hash);
++      $hmac->add($nt_proof_str);
++      my $key_exch_key = $hmac->digest;
++      my $exported_sess_key = $key_exch_key; # as NTLMSSP_NEGOTIATE_KEY_EXCH is not set
++      $hmac = Digest::HMAC_MD5->new($exported_sess_key);
++      $concat = $nego_msg . $challenge . $response;
++      $hmac->add($concat);
++      $mic = $hmac->digest;
++      substr($response, $mic_off, length($mic), $mic);
++    } else {
++      $response .= $lm_hdr . $nt_hdr . $domain_hdr . $user_hdr .
++                   $wks_hdr . $session_hdr . $flags .
++		   $domain . $u_user . $u_host . $lmResp . $ntResp;
++    }
+   }
+   else # first response;
+   {
+@@ -342,6 +369,7 @@
+     $domain_hdr = &hdr($domain, $msg1_hlen, $d_off);
+     $response .= $host_hdr . $domain_hdr . $msg1_host . $domain;
+     $state = 1;
++    $nego_msg = $response; # save negotiate message for MIC calculation
+   }
+   return encode_base64($response, "");
+ }
+@@ -449,26 +477,31 @@
+   return $p16;
+ }
+ 
+-sub lmv2Encrypt {
+-  my ($data) = @_;
+-
++sub ntlmv2Hash {
+   my $u_pass = &unicode($password);
+   my $ntlm_hash = mdfour($u_pass);
+ 
+-  my $u_user = &unicode("\U$user\E");
+-  my $u_domain = &unicode("$domain");
++  my $u_user = &unicode($user);
++  $u_user =~ tr/a-z/A-Z/;
++  my $u_domain = $domain;
+   my $concat = $u_user . $u_domain;
+ 
+   my $hmac = Digest::HMAC_MD5->new($ntlm_hash);
+   $hmac->add($concat);
+-  my $ntlm_v2_hash = $hmac->digest;
++  return $hmac->digest;
++}
++
++sub lmv2Encrypt {
++  my ($data) = @_;
++
++  my $ntlm_v2_hash = &ntlmv2Hash;
+ 
+   # Firefox seems to use this as its random challenge
+   my $random_challenge = "\0" x 8;
+ 
+   my $concat2 = $data . $random_challenge;
+ 
+-  $hmac = Digest::HMAC_MD5->new($ntlm_v2_hash);
++  my $hmac = Digest::HMAC_MD5->new($ntlm_v2_hash);
+   $hmac->add(substr($data, 0, 8) . $random_challenge);
+   my $r = $hmac->digest . $random_challenge;
+ 
+@@ -478,27 +511,37 @@
+ sub ntv2Encrypt {
+   my ($data, $target) = @_;
+ 
+-  my $u_pass = &unicode($password);
+-  my $ntlm_hash = mdfour($u_pass);
+-
+-  my $u_user = &unicode("\U$user\E");
+-  my $u_domain = &unicode("$domain");
+-  my $concat = $u_user . $u_domain;
+-
+-  my $hmac = Digest::HMAC_MD5->new($ntlm_hash);
+-  $hmac->add($concat);
+-  my $ntlm_v2_hash = $hmac->digest;
++  my $ntlm_v2_hash = &ntlmv2Hash;
+ 
+   my $zero_long = "\000" x 4;
+   my $sig = pack("H8", "01010000");
+-  my $time = pack("VV", (time + 11644473600) + 10000000);
++
++  my $avPairs = $target;
++  my $avId = unpack("S", substr($avPairs, 0, 2));
++  my $avLen = unpack("S", substr($avPairs, 2, 2));
++  do { # scan MsvAvTimestamp
++      $avLen = $avLen + 4;
++      $avPairs = substr($avPairs, $avLen, length($avPairs) - $avLen);
++      $avId = unpack("S", substr($avPairs, 0, 2));
++      $avLen = unpack("S", substr($avPairs, 2, 2));
++  }
++  while ( ($avId != 0) && ($avId != 7) );
++  my $time;
++  if ($avId == 7) {
++      $time = substr($avPairs, 4, $avLen);
++  } else {
++      $time = pack("Q", (time + 11644473600) * 10000000);
++  }
++
+   my $rand = "\0" x 8;
++  $target = substr($target, 0, length($target) - 4); # remove the trailer
++  my $msgAvFlags = pack("H16", "0600040002000000"); # with MIC
+   my $blob = $sig . $zero_long . $time . $rand . $zero_long .
+-      $target . $zero_long;
++             $target . $msgAvFlags . $zero_long . $zero_long . $zero_long;
+ 
+-  $concat = $data . $blob;
++  my $concat = $data . $blob;
+ 
+-  $hmac = Digest::HMAC_MD5->new($ntlm_v2_hash);
++  my $hmac = Digest::HMAC_MD5->new($ntlm_v2_hash);
+   $hmac->add($concat);
+ 
+   my $d = $hmac->digest;

@@ -1,0 +1,11 @@
+--- LWP/Protocol/http.pm.dist	2018-06-06 03:49:03.000000000 +0900
++++ LWP/Protocol/http.pm	2018-08-02 16:56:26.882660400 +0900
+@@ -449,7 +449,7 @@
+     $response->request($request);
+     $self->_get_sock_info($response, $socket);
+ 
+-    if ($method eq "CONNECT") {
++    if ($method eq "CONNECT" && $code ne "407") {
+ 	$response->{client_socket} = $socket;  # so it can be picked up
+ 	return $response;
+     }
